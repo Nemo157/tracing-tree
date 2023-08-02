@@ -205,6 +205,13 @@ where
         }
     }
 
+    pub fn with_print_span_elapsed(self, print_span_elapsed: bool) -> Self {
+        Self {
+            config: self.config.with_print_span_elapsed(print_span_elapsed),
+            ..self
+        }
+    }
+
     fn styled(&self, style: Style, text: impl AsRef<str>) -> String {
         if self.config.ansi {
             style.paint(text.as_ref()).to_string()
@@ -364,41 +371,43 @@ where
             .map(|scope| scope.count())
             .unwrap_or(0);
 
-        // check if this event occurred in the context of a span.
-        // if it has, get the start time of this span.
-        let start = match ctx.current_span().id() {
-            Some(id) => match ctx.span(id) {
-                // if the event is in a span, get the span's starting point.
-                Some(ctx) => {
-                    let ext = ctx.extensions();
-                    let data = ext
-                        .get::<Data>()
-                        .expect("Data cannot be found in extensions");
-                    Some(data.start)
-                }
+        if self.config.print_span_elapsed {
+            // check if this event occurred in the context of a span.
+            // if it has, get the start time of this span.
+            let start = match ctx.current_span().id() {
+                Some(id) => match ctx.span(id) {
+                    // if the event is in a span, get the span's starting point.
+                    Some(ctx) => {
+                        let ext = ctx.extensions();
+                        let data = ext
+                            .get::<Data>()
+                            .expect("Data cannot be found in extensions");
+                        Some(data.start)
+                    }
+                    None => None,
+                },
                 None => None,
-            },
-            None => None,
-        };
-        if let Some(start) = start {
-            let elapsed = start.elapsed();
-            let millis = elapsed.as_millis();
-            let secs = elapsed.as_secs();
-            let (n, unit) = if millis < 1000 {
-                (millis as _, "ms")
-            } else if secs < 60 {
-                (secs, "s ")
-            } else {
-                (secs / 60, "m ")
             };
-            let n = format!("{n:>3}");
-            write!(
-                &mut event_buf,
-                "{timestamp}{unit} ",
-                timestamp = self.styled(Style::new().dimmed(), n),
-                unit = self.styled(Style::new().dimmed(), unit),
-            )
-            .expect("Unable to write to buffer");
+            if let Some(start) = start {
+                let elapsed = start.elapsed();
+                let millis = elapsed.as_millis();
+                let secs = elapsed.as_secs();
+                let (n, unit) = if millis < 1000 {
+                    (millis as _, "ms")
+                } else if secs < 60 {
+                    (secs, "s ")
+                } else {
+                    (secs / 60, "m ")
+                };
+                let n = format!("{n:>3}");
+                write!(
+                    &mut event_buf,
+                    "{timestamp}{unit} ",
+                    timestamp = self.styled(Style::new().dimmed(), n),
+                    unit = self.styled(Style::new().dimmed(), unit),
+                )
+                .expect("Unable to write to buffer");
+            }
         }
 
         #[cfg(feature = "tracing-log")]

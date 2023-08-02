@@ -47,6 +47,7 @@ pub struct Config {
     pub bracketed_fields: bool,
     /// Whether to delay printing spans till an event occurs
     pub delay_spans: bool,
+    pub print_span_elapsed: bool,
 }
 
 impl Config {
@@ -111,6 +112,13 @@ impl Config {
         }
     }
 
+    pub fn with_print_span_elapsed(self, print_span_elapsed: bool) -> Self {
+        Self {
+            print_span_elapsed,
+            ..self
+        }
+    }
+
     pub(crate) fn prefix(&self) -> String {
         let mut buf = String::new();
         if self.render_thread_ids {
@@ -148,6 +156,7 @@ impl Default for Config {
             verbose_exit: false,
             bracketed_fields: false,
             delay_spans: false,
+            print_span_elapsed: false,
         }
     }
 }
