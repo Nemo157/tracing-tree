@@ -14,7 +14,7 @@ pub(crate) const LINE_BRANCH: &str = "├";
 pub(crate) const LINE_CLOSE: &str = "┘";
 pub(crate) const LINE_OPEN: &str = "┐";
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) enum SpanMode {
     PreOpen,
     Open { verbose: bool },
@@ -45,6 +45,8 @@ pub struct Config {
     pub verbose_exit: bool,
     /// Whether to print squiggly brackets (`{}`) around the list of fields in a span.
     pub bracketed_fields: bool,
+    /// Whether to delay printing spans till an event occurs
+    pub delay_spans: bool,
 }
 
 impl Config {
@@ -102,6 +104,13 @@ impl Config {
         }
     }
 
+    pub fn with_delay_spans(self, delay_spans: bool) -> Self {
+        Self {
+            delay_spans,
+            ..self
+        }
+    }
+
     pub(crate) fn prefix(&self) -> String {
         let mut buf = String::new();
         if self.render_thread_ids {
@@ -138,40 +147,58 @@ impl Default for Config {
             verbose_entry: false,
             verbose_exit: false,
             bracketed_fields: false,
+            delay_spans: false,
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Buffers {
-    pub current_buf: String,
+    current_bufs: Vec<String>,
+    current_buf_index: usize,
     pub indent_buf: String,
 }
 
 impl Buffers {
     pub fn new() -> Self {
         Self {
-            current_buf: String::new(),
+            current_bufs: vec![String::new()],
+            current_buf_index: 0,
             indent_buf: String::new(),
         }
     }
 
-    pub fn flush_current_buf(&mut self, mut writer: impl io::Write) {
-        write!(writer, "{}", &self.current_buf).unwrap();
-        self.current_buf.clear();
+    pub fn current_buf(&mut self) -> &mut String {
+        &mut self.current_bufs[self.current_buf_index]
     }
 
-    pub fn flush_indent_buf(&mut self) {
-        self.current_buf.push_str(&self.indent_buf);
-        self.indent_buf.clear();
+    pub fn push_new_current_buf(&mut self) {
+        self.current_buf_index += 1;
+        if self.current_bufs.len() == self.current_buf_index {
+            self.current_bufs.push(String::new());
+        }
+    }
+
+    pub fn pop_current_buf(&mut self) {
+        self.current_buf_index = self.current_buf_index.saturating_sub(1);
+        self.current_buf().clear();
+    }
+
+    pub fn flush_current_bufs(&mut self, mut writer: impl io::Write) {
+        for buf in &mut self.current_bufs[..(self.current_buf_index + 1)] {
+            write!(writer, "{buf}").unwrap();
+            buf.clear();
+        }
+        self.current_buf_index = 0;
     }
 
     pub(crate) fn indent_current(&mut self, indent: usize, config: &Config, style: SpanMode) {
         let prefix = config.prefix();
+        let current_buf = &mut self.current_bufs[self.current_buf_index];
 
         // Render something when wraparound occurs so the user is aware of it
         if config.indent_lines {
-            self.current_buf.push('\n');
+            current_buf.push('\n');
 
             match style {
                 SpanMode::Close { .. } | SpanMode::PostClose => {
@@ -189,7 +216,7 @@ impl Buffers {
         }
 
         indent_block(
-            &mut self.current_buf,
+            &current_buf,
             &mut self.indent_buf,
             indent % config.wraparound,
             config.indent_amount,
@@ -197,20 +224,20 @@ impl Buffers {
             &prefix,
             style,
         );
-        self.current_buf.clear();
-        self.flush_indent_buf();
+        current_buf.clear();
+        std::mem::swap(&mut self.indent_buf, current_buf);
 
         // Render something when wraparound occurs so the user is aware of it
         if config.indent_lines {
             match style {
                 SpanMode::PreOpen | SpanMode::Open { .. } => {
                     if indent > 0 && (indent + 1) % config.wraparound == 0 {
-                        self.current_buf.push_str(&prefix);
+                        current_buf.push_str(&prefix);
                         for _ in 0..(indent % config.wraparound * config.indent_amount) {
-                            self.current_buf.push_str(LINE_HORIZ);
+                            current_buf.push_str(LINE_HORIZ);
                         }
-                        self.current_buf.push_str(LINE_CLOSE);
-                        self.current_buf.push('\n');
+                        current_buf.push_str(LINE_CLOSE);
+                        current_buf.push('\n');
                     }
                 }
                 _ => {}
@@ -226,7 +253,7 @@ pub struct FmtEvent<'a> {
 
 impl<'a> Visit for FmtEvent<'a> {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        let buf = &mut self.bufs.current_buf;
+        let buf = self.bufs.current_buf();
         let comma = if self.comma { "," } else { "" };
         match field.name() {
             "message" => {
@@ -401,7 +428,7 @@ fn indent_block_with_lines(
 }
 
 fn indent_block(
-    block: &mut String,
+    block: &str,
     buf: &mut String,
     indent: usize,
     indent_amount: usize,

@@ -198,6 +198,13 @@ where
         }
     }
 
+    pub fn with_delay_spans(self, delay_spans: bool) -> Self {
+        Self {
+            config: self.config.with_delay_spans(delay_spans),
+            ..self
+        }
+    }
+
     fn styled(&self, style: Style, text: impl AsRef<str>) -> String {
         if self.config.ansi {
             style.paint(text.as_ref()).to_string()
@@ -237,7 +244,7 @@ where
 
         let mut guard = self.bufs.lock().unwrap();
         let bufs = &mut *guard;
-        let mut current_buf = &mut bufs.current_buf;
+        let mut current_buf = bufs.current_buf();
 
         let indent = ctx
             .lookup_current()
@@ -287,9 +294,19 @@ where
             }
         }
 
-        bufs.indent_current(indent, &self.config, style);
-        let writer = self.make_writer.make_writer();
-        bufs.flush_current_buf(writer)
+        if self.config.delay_spans {
+            if matches!(style, SpanMode::Open { .. } ) {
+                bufs.indent_current(indent, &self.config, style);
+                bufs.push_new_current_buf();
+            }
+            if matches!(style, SpanMode::Close { .. }) {
+                bufs.pop_current_buf();
+            }
+        } else {
+            bufs.indent_current(indent, &self.config, style);
+            let writer = self.make_writer.make_writer();
+            bufs.flush_current_bufs(writer);
+        }
     }
 }
 
@@ -324,7 +341,7 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: Context<S>) {
         let mut guard = self.bufs.lock().unwrap();
         let bufs = &mut *guard;
-        let mut event_buf = &mut bufs.current_buf;
+        let mut event_buf = bufs.current_buf();
 
         // Time.
 
@@ -415,7 +432,7 @@ where
             .bufs
             .indent_current(indent, &self.config, SpanMode::Event);
         let writer = self.make_writer.make_writer();
-        bufs.flush_current_buf(writer)
+        bufs.flush_current_bufs(writer)
     }
 
     fn on_close(&self, id: Id, ctx: Context<S>) {
